@@ -68,7 +68,11 @@ struct Checkpoint {
 struct Args {
     /// Caminho para o arquivo RAR
     #[arg(short, long)]
-    file: PathBuf,
+    file: Option<PathBuf>,
+    
+    /// Comando customizado para executar (use $password para a senha)
+    #[arg(long)]
+    command: Option<String>,
 
     /// Tamanho mínimo da senha
     #[arg(short = 'm', long, default_value_t = 1)]
@@ -187,6 +191,56 @@ fn test_password(rar_path: &str, password: &str) -> bool {
             }
         }
         Err(_) => false,
+    }
+}
+
+fn test_password_with_command(command: &str, password: &str, verbose: bool) -> bool {
+    if FOUND.load(Ordering::Relaxed) {
+        return false;
+    }
+    
+    // Substitui $password pela senha atual
+    let cmd = command.replace("$password", password);
+    
+    TESTED.fetch_add(1, Ordering::Relaxed);
+    
+    if verbose {
+        eprintln!("  🔧 Executando: {}", cmd);
+    }
+    
+    // Separa comando e argumentos
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if parts.is_empty() {
+        return false;
+    }
+    
+    let output = if cfg!(target_os = "windows") {
+        // Windows: usa cmd /c para executar
+        Command::new("cmd")
+            .args(&["/c", &cmd])
+            .output()
+    } else {
+        // Unix: usa sh -c
+        Command::new("sh")
+            .args(&["-c", &cmd])
+            .output()
+    };
+    
+    match output {
+        Ok(result) => {
+            if result.status.success() {
+                FOUND.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
+        Err(e) => {
+            if verbose {
+                eprintln!("    ⚠️  Erro ao executar comando: {}", e);
+            }
+            false
+        }
     }
 }
 
@@ -528,6 +582,7 @@ fn bruteforce_streaming_with_checkpoint(
     resume: bool,
     partition_id: Option<usize>,
     num_partitions: usize,
+    command: Option<&str>,
 ) -> Option<String> {
     let chars: Vec<char> = charset.chars().collect();
     
@@ -647,7 +702,11 @@ fn bruteforce_streaming_with_checkpoint(
                 }
             }
             
-            test_password(rar_path, password)
+            if let Some(cmd) = command {
+                test_password_with_command(cmd, password, verbose)
+            } else {
+                test_password(rar_path, password)
+            }
         });
         
         if found.is_some() {
@@ -750,13 +809,29 @@ fn main() {
 
     println!("🔓 RAR Password Cracker - CLI Edition");
     println!("=========================================\n");
-
-    if !args.file.exists() {
-        eprintln!("❌ Arquivo não encontrado: {:?}", args.file);
+    
+    // Verifica se está usando comando customizado ou arquivo
+    let (using_command, rar_path) = if let Some(cmd) = &args.command {
+        println!("🔧 Modo comando customizado");
+        println!("   Comando: {}", cmd);
+        println!("   Placeholder: $password\n");
+        (true, "command".to_string())
+    } else if let Some(file) = &args.file {
+        if !file.exists() {
+            eprintln!("❌ Arquivo não encontrado: {:?}", file);
+            std::process::exit(1);
+        }
+        (false, file.to_str().unwrap().to_string())
+    } else {
+        eprintln!("❌ Especifique um arquivo com -f ou um comando com --command");
+        eprintln!("\nExemplos:");
+        eprintln!("  {} -f arquivo.rar --az --09 -m 4 -x 6", std::env::args().next().unwrap());
+        eprintln!("  {} --command \"mysql -u root -p$password\" --09 -m 4 -x 8", std::env::args().next().unwrap());
+        eprintln!("  {} --command \"curl -u admin:$password http://site.com\" --custom \"abc123\" -m 6 -x 6", std::env::args().next().unwrap());
         std::process::exit(1);
-    }
+    };
 
-    let rar_path = args.file.to_str().unwrap();
+    let rar_path = rar_path.as_str();
 
     // Verificar GPU se solicitado
     if args.gpu {
@@ -790,7 +865,11 @@ fn main() {
         .build_global()
         .unwrap();
 
-    println!("📁 Arquivo: {}", rar_path);
+    if using_command {
+        println!("🎯 Alvo: Comando customizado");
+    } else {
+        println!("📁 Arquivo: {}", rar_path);
+    }
     println!("💻 CPUs disponíveis: {}", available_cpus);
     println!("🔧 Usando {} threads (max permitido: {})", num_threads, max_cpus);
     
@@ -871,6 +950,7 @@ fn main() {
             args.resume,
             args.partition_id,
             args.parallel,
+            args.command.as_deref(),
         );
         let duration = start.elapsed();
         let tested_count = TESTED.load(Ordering::Relaxed);
@@ -971,14 +1051,24 @@ fn main() {
     println!("🔍 Iniciando força bruta...\n");
     let brute_start = Instant::now();
 
-    let found_password = passwords.par_iter().find_any(|password| {
-        pb.inc(1);
-        if args.verbose {
-            pb.set_message(format!("Testando: {}", password));
-        }
-
-        test_password(rar_path, password)
-    });
+    let found_password = if using_command {
+        let command = args.command.as_ref().unwrap();
+        passwords.par_iter().find_any(|password| {
+            pb.inc(1);
+            if args.verbose {
+                pb.set_message(format!("Testando: {}", password));
+            }
+            test_password_with_command(command, password, args.verbose)
+        })
+    } else {
+        passwords.par_iter().find_any(|password| {
+            pb.inc(1);
+            if args.verbose {
+                pb.set_message(format!("Testando: {}", password));
+            }
+            test_password(rar_path, password)
+        })
+    };
 
     let duration = brute_start.elapsed();
     let tested_count = TESTED.load(Ordering::Relaxed);

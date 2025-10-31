@@ -1,33 +1,41 @@
 {
-  "start_time": "2025-10-31 19:11:57",
-  "end_time": null,
-  "total_duration_seconds": 0.0,
+  "start_time": "2025-10-31 20:00:51",
+  "end_time": "2025-10-31 20:04:33",
+  "total_duration_seconds": 221.2707184,
   "phases": {
-    "Gerar senhas (GPU)": {
-      "name": "Gerar senhas (GPU)",
-      "start_time": "2025-10-31 19:11:57",
-      "end_time": "2025-10-31 19:11:57",
-      "duration_seconds": 0.3278833,
+    "Força bruta": {
+      "name": "Força bruta",
+      "start_time": "2025-10-31 20:04:33",
+      "end_time": "2025-10-31 20:04:33",
+      "duration_seconds": 221.2591205,
+      "items_processed": 9672,
+      "items_per_second": 43.7134522551806
+    },
+    "Gerar senhas (CPU)": {
+      "name": "Gerar senhas (CPU)",
+      "start_time": "2025-10-31 20:00:51",
+      "end_time": "2025-10-31 20:00:51",
+      "duration_seconds": 0.002819,
       "items_processed": 10000,
-      "items_per_second": 30498.65607671998
+      "items_per_second": 3547357.2188719404
     },
     "Configurar charset": {
       "name": "Configurar charset",
-      "start_time": "2025-10-31 19:11:57",
-      "end_time": "2025-10-31 19:11:57",
-      "duration_seconds": 2.4e-6,
+      "start_time": "2025-10-31 20:00:51",
+      "end_time": "2025-10-31 20:00:51",
+      "duration_seconds": 3.4e-6,
       "items_processed": 10,
-      "items_per_second": 4166666.666666667
+      "items_per_second": 2941176.470588235
     }
   },
   "total_passwords_generated": 10000,
-  "total_passwords_tested": 0,
-  "passwords_per_second": 0.0,
-  "password_found": null,
+  "total_passwords_tested": 9672,
+  "passwords_per_second": 43.71116101551013,
+  "password_found": "1234",
   "charset_used": "0123456789",
   "min_length": 4,
   "max_length": 4,
-  "gpu_used": true,
+  "gpu_used": false,
   "threads_used": 24,
   "partitions": 1,
   "partition_id": null
