@@ -61,12 +61,12 @@ struct Checkpoint {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "rar_cracker")]
-#[command(author = "RAR Password Cracker")]
+#[command(name = "brute_force")]
+#[command(author = "Universal Brute Force Tool")]
 #[command(version = "1.0")]
-#[command(about = "Força bruta em arquivos RAR usando CPU multi-thread", long_about = None)]
+#[command(about = "Ferramenta universal de força bruta com suporte a GPU", long_about = None)]
 struct Args {
-    /// Caminho para o arquivo RAR
+    /// Arquivo com senhas para testar (depreciado - use --command)
     #[arg(short, long)]
     file: Option<PathBuf>,
     
@@ -167,31 +167,12 @@ struct Args {
     verbose: bool,
 }
 
-fn test_password(rar_path: &str, password: &str) -> bool {
-    if FOUND.load(Ordering::Relaxed) {
-        return false;
-    }
-
-    let output = Command::new("C:\\Program Files\\7-Zip\\7z.exe")
-        .arg("t")
-        .arg(rar_path)
-        .arg(format!("-p{}", password))
-        .arg("-y")
-        .output();
-
-    TESTED.fetch_add(1, Ordering::Relaxed);
-
-    match output {
-        Ok(result) => {
-            if result.status.success() {
-                FOUND.store(true, Ordering::Relaxed);
-                true
-            } else {
-                false
-            }
-        }
-        Err(_) => false,
-    }
+// Função legada - mantida para compatibilidade
+fn test_password(_target: &str, _password: &str) -> bool {
+    // Esta função foi depreciada em favor de test_password_with_command
+    // Use --command para especificar o comando a executar
+    eprintln!("⚠️  Função test_password depreciada. Use --command.");
+    false
 }
 
 fn test_password_with_command(command: &str, password: &str, verbose: bool) -> bool {
@@ -807,7 +788,7 @@ fn main() {
         ..Default::default()
     };
 
-    println!("🔓 RAR Password Cracker - CLI Edition");
+    println!("🔓 Universal Brute Force Tool");
     println!("=========================================\n");
     
     // Verifica se está usando comando customizado ou arquivo
@@ -823,11 +804,11 @@ fn main() {
         }
         (false, file.to_str().unwrap().to_string())
     } else {
-        eprintln!("❌ Especifique um arquivo com -f ou um comando com --command");
+        eprintln!("❌ Especifique um comando com --command");
         eprintln!("\nExemplos:");
-        eprintln!("  {} -f arquivo.rar --az --09 -m 4 -x 6", std::env::args().next().unwrap());
-        eprintln!("  {} --command \"mysql -u root -p$password\" --09 -m 4 -x 8", std::env::args().next().unwrap());
+        eprintln!("  {} --command \"mysql -u root -p$password -e quit\" --az --09 -m 4 -x 8", std::env::args().next().unwrap());
         eprintln!("  {} --command \"curl -u admin:$password http://site.com\" --custom \"abc123\" -m 6 -x 6", std::env::args().next().unwrap());
+        eprintln!("  {} --command \"ssh user@host -p $password exit\" --wordlist passwords.txt", std::env::args().next().unwrap());
         std::process::exit(1);
     };
 
@@ -1005,9 +986,9 @@ fn main() {
             eprintln!("❌ Nenhum charset selecionado!");
             eprintln!("   Use --az, --AZ, --09, --specials ou --custom");
             eprintln!("\nExemplos:");
-            eprintln!("  {} -f arquivo.rar --az --09 -m 4 -x 6", std::env::args().next().unwrap());
-            eprintln!("  {} -f arquivo.rar --AZ --az --09 -m 8 -x 8", std::env::args().next().unwrap());
-            eprintln!("  {} -f arquivo.rar --custom '123' -m 6 -x 6", std::env::args().next().unwrap());
+            eprintln!("  {} --command \"your_command $password\" --az --09 -m 4 -x 6", std::env::args().next().unwrap());
+            eprintln!("  {} --command \"your_command $password\" --AZ --az --09 -m 8 -x 8", std::env::args().next().unwrap());
+            eprintln!("  {} --command \"your_command $password\" --custom '123' -m 6 -x 6", std::env::args().next().unwrap());
             std::process::exit(1);
         }
 

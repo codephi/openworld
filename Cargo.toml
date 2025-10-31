@@ -1,7 +1,10 @@
 [package]
-name = "rar_cracker"
-version = "0.1.0"
+name = "brute_force"
+version = "1.0.0"
 edition = "2021"
+authors = ["Your Name"]
+description = "Universal brute force tool with GPU acceleration"
+license = "MIT"
 
 [dependencies]
 rayon = "1.7"
