@@ -1,0 +1,34 @@
+{
+  "start_time": "2025-10-31 19:11:57",
+  "end_time": null,
+  "total_duration_seconds": 0.0,
+  "phases": {
+    "Gerar senhas (GPU)": {
+      "name": "Gerar senhas (GPU)",
+      "start_time": "2025-10-31 19:11:57",
+      "end_time": "2025-10-31 19:11:57",
+      "duration_seconds": 0.3278833,
+      "items_processed": 10000,
+      "items_per_second": 30498.65607671998
+    },
+    "Configurar charset": {
+      "name": "Configurar charset",
+      "start_time": "2025-10-31 19:11:57",
+      "end_time": "2025-10-31 19:11:57",
+      "duration_seconds": 2.4e-6,
+      "items_processed": 10,
+      "items_per_second": 4166666.666666667
+    }
+  },
+  "total_passwords_generated": 10000,
+  "total_passwords_tested": 0,
+  "passwords_per_second": 0.0,
+  "password_found": null,
+  "charset_used": "0123456789",
+  "min_length": 4,
+  "max_length": 4,
+  "gpu_used": true,
+  "threads_used": 24,
+  "partitions": 1,
+  "partition_id": null
+}

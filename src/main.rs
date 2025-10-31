@@ -11,10 +11,40 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 static FOUND: AtomicBool = AtomicBool::new(false);
 static TESTED: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct Metrics {
+    start_time: String,
+    end_time: Option<String>,
+    total_duration_seconds: f64,
+    phases: HashMap<String, PhaseMetrics>,
+    total_passwords_generated: usize,
+    total_passwords_tested: usize,
+    passwords_per_second: f64,
+    password_found: Option<String>,
+    charset_used: String,
+    min_length: usize,
+    max_length: usize,
+    gpu_used: bool,
+    threads_used: usize,
+    partitions: usize,
+    partition_id: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PhaseMetrics {
+    name: String,
+    start_time: String,
+    end_time: String,
+    duration_seconds: f64,
+    items_processed: Option<usize>,
+    items_per_second: Option<f64>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Checkpoint {
@@ -83,6 +113,14 @@ struct Args {
     /// Usar GPU para geração de combinações (se disponível)
     #[arg(long)]
     gpu: bool,
+
+    /// Tamanho do workgroup na GPU (threads por grupo)
+    #[arg(long, default_value_t = 64)]
+    workgroup_size: u32,
+
+    /// Tamanho do batch para processar na GPU por vez
+    #[arg(long, default_value_t = 65536)]
+    gpu_batch_size: usize,
 
     /// Número de partições paralelas para dividir o espaço de busca
     #[arg(long, default_value_t = 1)]
@@ -177,10 +215,17 @@ fn build_charset(args: &Args) -> String {
 }
 
 fn generate_passwords_bruteforce(charset: &str, min_len: usize, max_len: usize) -> Vec<String> {
-    generate_passwords_bruteforce_with_gpu(charset, min_len, max_len, false)
+    generate_passwords_bruteforce_with_gpu(charset, min_len, max_len, false, 64, 65536)
 }
 
-fn generate_passwords_bruteforce_with_gpu(charset: &str, min_len: usize, max_len: usize, use_gpu: bool) -> Vec<String> {
+fn generate_passwords_bruteforce_with_gpu(
+    charset: &str, 
+    min_len: usize, 
+    max_len: usize, 
+    use_gpu: bool,
+    workgroup_size: u32,
+    batch_size: usize,
+) -> Vec<String> {
     let mut passwords = Vec::new();
     let chars: Vec<char> = charset.chars().collect();
 
@@ -211,9 +256,11 @@ fn generate_passwords_bruteforce_with_gpu(charset: &str, min_len: usize, max_len
     if use_gpu {
         println!("\n🎮 Tentando usar GPU para geração...");
         
-        match gpu::GpuPasswordGenerator::new(charset) {
+        match gpu::GpuPasswordGenerator::new(charset, workgroup_size) {
             Ok(gpu_gen) => {
                 println!("✅ GPU inicializada com sucesso!");
+                println!("⚙️  Workgroup size: {} threads", workgroup_size);
+                println!("📦 Batch size: {} senhas por vez", format_number(batch_size));
                 println!("🚀 Gerando senhas na GPU...");
                 
                 let pb = ProgressBar::new(total as u64);
@@ -223,9 +270,6 @@ fn generate_passwords_bruteforce_with_gpu(charset: &str, min_len: usize, max_len
                         .unwrap()
                         .progress_chars("#>-"),
                 );
-                
-                // Gera em batches na GPU
-                let batch_size = 65536; // 64K senhas por batch
                 
                 for len in min_len..=max_len {
                     let len_total = chars.len().pow(len as u32);
@@ -654,8 +698,55 @@ fn check_gpu_availability() -> (bool, String) {
     }
 }
 
+fn save_metrics(metrics: &Metrics) {
+    if let Ok(json) = serde_json::to_string_pretty(metrics) {
+        std::fs::write("metadata.json", json).ok();
+    }
+}
+
+fn update_phase_metrics(
+    metrics: &mut Metrics,
+    phase_name: &str,
+    start: Instant,
+    items: Option<usize>,
+) {
+    let duration = start.elapsed();
+    let phase_metrics = PhaseMetrics {
+        name: phase_name.to_string(),
+        start_time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        end_time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        duration_seconds: duration.as_secs_f64(),
+        items_processed: items,
+        items_per_second: items.map(|i| i as f64 / duration.as_secs_f64()),
+    };
+    
+    metrics.phases.insert(phase_name.to_string(), phase_metrics.clone());
+    
+    println!("⏱️  {} concluído em {:.2}s", phase_name, duration.as_secs_f64());
+    if let Some(items) = items {
+        if let Some(rate) = phase_metrics.items_per_second {
+            println!("   📈 {} itens processados ({:.0}/s)", format_number(items), rate);
+        }
+    }
+    
+    save_metrics(metrics);
+}
+
 fn main() {
+    let main_start = Instant::now();
     let args = Args::parse();
+    
+    let mut metrics = Metrics {
+        start_time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        threads_used: args.threads.unwrap_or_else(num_cpus::get),
+        gpu_used: args.gpu,
+        charset_used: String::new(),
+        min_length: args.min,
+        max_length: args.max,
+        partitions: args.parallel,
+        partition_id: args.partition_id,
+        ..Default::default()
+    };
 
     println!("🔓 RAR Password Cracker - CLI Edition");
     println!("=========================================\n");
@@ -809,11 +900,14 @@ fn main() {
 
     let passwords = if let Some(wordlist_path) = &args.wordlist {
         // Modo wordlist
+        let wordlist_start = Instant::now();
         println!("📖 Carregando wordlist: {:?}", wordlist_path);
         match std::fs::read_to_string(wordlist_path) {
             Ok(content) => {
                 let passwords: Vec<String> = content.lines().map(|s| s.to_string()).collect();
                 println!("📝 {} senhas carregadas\n", format_number(passwords.len()));
+                metrics.total_passwords_generated = passwords.len();
+                update_phase_metrics(&mut metrics, "Carregar wordlist", wordlist_start, Some(passwords.len()));
                 passwords
             }
             Err(e) => {
@@ -823,7 +917,9 @@ fn main() {
         }
     } else {
         // Modo força bruta
+        let charset_start = Instant::now();
         let charset = build_charset(&args);
+        metrics.charset_used = charset.clone();
         
         if charset.is_empty() {
             eprintln!("❌ Nenhum charset selecionado!");
@@ -835,7 +931,14 @@ fn main() {
             std::process::exit(1);
         }
 
-        generate_passwords_bruteforce_with_gpu(&charset, args.min, args.max, args.gpu)
+        update_phase_metrics(&mut metrics, "Configurar charset", charset_start, Some(charset.len()));
+        
+        let gen_start = Instant::now();
+        let passwords = generate_passwords_bruteforce_with_gpu(&charset, args.min, args.max, args.gpu, args.workgroup_size, args.gpu_batch_size);
+        metrics.total_passwords_generated = passwords.len();
+        let gen_type = if args.gpu { "Gerar senhas (GPU)" } else { "Gerar senhas (CPU)" };
+        update_phase_metrics(&mut metrics, gen_type, gen_start, Some(passwords.len()));
+        passwords
     };
 
     if passwords.is_empty() {
@@ -866,7 +969,7 @@ fn main() {
     );
 
     println!("🔍 Iniciando força bruta...\n");
-    let start = Instant::now();
+    let brute_start = Instant::now();
 
     let found_password = passwords.par_iter().find_any(|password| {
         pb.inc(1);
@@ -877,12 +980,16 @@ fn main() {
         test_password(rar_path, password)
     });
 
-    let duration = start.elapsed();
+    let duration = brute_start.elapsed();
     let tested_count = TESTED.load(Ordering::Relaxed);
+    
+    metrics.total_passwords_tested = tested_count;
+    update_phase_metrics(&mut metrics, "Força bruta", brute_start, Some(tested_count));
 
     match found_password {
         Some(password) => {
             pb.finish_with_message(format!("✅ SENHA ENCONTRADA: {}", password));
+            metrics.password_found = Some(password.to_string());
             println!("\n🎉 =========================================");
             println!("🎉 SENHA ENCONTRADA: {}", password);
             println!("🎉 ========================================\n");
@@ -912,4 +1019,19 @@ fn main() {
             println!("   - Aumente o tamanho máximo da senha");
         }
     }
+    
+    // Finalizar e salvar métricas
+    let total_duration = main_start.elapsed();
+    metrics.end_time = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    metrics.total_duration_seconds = total_duration.as_secs_f64();
+    metrics.passwords_per_second = tested_count as f64 / total_duration.as_secs_f64();
+    
+    save_metrics(&metrics);
+    
+    println!("\n📊 RESUMO FINAL:");
+    println!("   ⏱️  Tempo total: {:.2}s", total_duration.as_secs_f64());
+    println!("   📝 Senhas geradas: {}", format_number(metrics.total_passwords_generated));
+    println!("   ✅ Senhas testadas: {}", format_number(tested_count));
+    println!("   ⚡ Velocidade média: {:.0} senhas/seg", metrics.passwords_per_second);
+    println!("   💾 Métricas detalhadas salvas em: metadata.json");
 }
